@@ -1,170 +1,288 @@
 """
-Buy Range Calculation Module
+Buy Range Calculator v2 for JP Stock Analyzer
+Based on KINRO backend logic
+
+Strategy: Technical-anchored using weighted average of MA50, MA120, MA200, and 90-day high pullback.
 """
+
 from dataclasses import dataclass
-from typing import Dict, Tuple, Any
+from typing import List, Tuple, Dict, Any
 import sys
 import os
+import re
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from config import BUY_RANGE_CONFIG, BUY_RANGE_VOLATILITY_CONFIG
 from models.ticker import JPTickerData
-from config import BUY_RANGE_CONFIG
 
 
 @dataclass
-class BuyZone:
-    """Buy zone definition"""
-    label: str           # "Aggressive Zone" / "Standard Zone"
-    price_low: float     # Zone lower bound
-    price_high: float    # Zone upper bound
-    allocation: str      # Suggested allocation "50%"
-    is_current: bool     # Is current price in this zone
+class BuyRangeTier:
+    """Single buy range tier"""
+    price_low: float
+    price_high: float
+    suggested_allocation: str
+    tier_label: str
+    is_current: bool = False
 
 
-def calculate_anchor_price(data: JPTickerData) -> Tuple[float, str]:
+@dataclass
+class BuyRangeResult:
+    """Complete buy range calculation result"""
+    symbol: str
+    current_price: float
+    
+    # Three-tier zones
+    aggressive: BuyRangeTier
+    standard: BuyRangeTier
+    conservative: BuyRangeTier
+    
+    # Current position
+    current_zone: str  # "above_range" | "aggressive" | "standard" | "conservative" | "below_range"
+    
+    # Anchor information
+    anchor_price: float
+    anchor_type: str  # "weighted_average"
+    primary_support: float
+    
+    # Action guidance
+    action_text: str
+    
+    # Calculation notes (for debugging)
+    calculation_notes: List[str]
+
+
+def get_volatility_factor(volatility: float) -> float:
     """
-    Calculate anchor price for buy range
+    Calculate volatility adjustment factor.
+    Higher volatility -> wider zones; Lower volatility -> tighter zones.
+    """
+    if volatility <= 0:
+        return 1.0
+    
+    cfg = BUY_RANGE_VOLATILITY_CONFIG
+    factor = volatility / cfg["baseline"]
+    return max(cfg["min_factor"], min(cfg["max_factor"], factor))
+
+
+def calculate_anchor_price(data: JPTickerData, company_type: str) -> Tuple[float, List[str]]:
+    """
+    Calculate weighted average anchor price (KINRO core logic).
+    
+    Formula: anchor = MA50×w1 + MA120×w2 + MA200×w3 + (90d_high × pullback_pct)×w4
     
     Returns:
-        (anchor_price, anchor_type)
-    
-    Anchor logic (priority):
-    1. MA200 (if trend is healthy and price within reasonable range)
-    2. MA50 (if MA200 is too far)
-    3. Bollinger Band lower (if oversold)
+        (anchor_price, calculation_notes)
     """
-    price = data.current_price
-    ma200 = data.ma_200
-    ma50 = data.ma_50
-    bb_lower = data.bb_lower
+    config = BUY_RANGE_CONFIG.get(company_type, BUY_RANGE_CONFIG["DEFAULT"])
+    weights = config["anchor_weights"]
+    pullback_pct = config["pullback_pct"]
     
-    # Check if MA200 is valid
-    if ma200 and ma200 > 0:
-        distance_ma200 = (price - ma200) / ma200
-        
-        # If price is within +15% of MA200, use MA200 (healthy uptrend)
-        if 0 <= distance_ma200 < 0.15:
-            return (ma200, "MA200")
-        
-        # If price is below MA200, still use MA200 (bottom fishing)
-        if distance_ma200 < 0:
-            return (ma200, "MA200")
+    current_price = data.current_price
+    notes: List[str] = []
     
-    # Fallback to MA50 if MA200 is too far or unavailable
-    if ma50 and ma50 > 0:
-        distance_ma50 = (price - ma50) / ma50
-        # Only use MA50 as anchor if price is within +10%
-        if distance_ma50 < 0.10:
-            return (ma50, "MA50")
-        else:
-            # Price is extended from MA50 too, mark as FAR
-            return (ma50, "MA50_FAR")
+    # Get MA values, fallback to estimated values if missing
+    ma_50 = data.ma_50 if data.ma_50 > 0 else current_price * 0.95
+    ma_120 = data.ma_120 if data.ma_120 > 0 else current_price * 0.90
+    ma_200 = data.ma_200 if data.ma_200 > 0 else current_price * 0.85
+    high_90d = data.high_90d if data.high_90d > 0 else current_price
     
-    # Last resort: Bollinger Band lower
-    if bb_lower and bb_lower > 0:
-        return (bb_lower, "BB_Lower")
+    # Calculate pullback anchor
+    pullback_anchor = high_90d * pullback_pct
     
-    # If nothing available, use current price
-    return (price, "Current")
+    # Weighted average
+    anchor = (
+        ma_50 * weights["ma50"] +
+        ma_120 * weights["ma120"] +
+        ma_200 * weights["ma200"] +
+        pullback_anchor * weights["pullback"]
+    )
+    
+    notes.append(f"Type {company_type} anchor calculation:")
+    notes.append(f"  MA50=¥{ma_50:,.0f} × {weights['ma50']:.0%}")
+    notes.append(f"  MA120=¥{ma_120:,.0f} × {weights['ma120']:.0%}")
+    notes.append(f"  MA200=¥{ma_200:,.0f} × {weights['ma200']:.0%}")
+    notes.append(f"  Pullback(90d_high×{pullback_pct:.0%})=¥{pullback_anchor:,.0f} × {weights['pullback']:.0%}")
+    notes.append(f"  → Anchor=¥{anchor:,.0f}")
+    
+    return anchor, notes
 
 
-def calculate_buy_range(data: JPTickerData) -> Dict[str, Any]:
+def calculate_buy_range(data: JPTickerData, company_type: str = "DEFAULT") -> Dict[str, Any]:
     """
-    Calculate buy range zones
+    Calculate three-tier buy range.
+    
+    Args:
+        data: Stock data
+        company_type: Company type (A/B/C/D/DEFAULT)
     
     Returns:
-        {
-            "anchor_price": float,
-            "anchor_type": str,        # "MA200" / "MA50" / "BB_Lower"
-            "aggressive": BuyZone,
-            "standard": BuyZone,
-            "current_zone": str,       # "above" / "aggressive" / "standard" / "below"
-            "action": str,             # Buy suggestion text
-            "distance_to_aggressive": float,  # Distance to aggressive zone upper (positive=need drop, negative=already in)
-        }
+        Dictionary with all zone information (compatible with v1 interface)
     """
-    price = data.current_price
-    anchor_price, anchor_type = calculate_anchor_price(data)
+    config = BUY_RANGE_CONFIG.get(company_type, BUY_RANGE_CONFIG["DEFAULT"])
+    current_price = data.current_price
+    notes: List[str] = []
     
-    # Get configuration
-    agg_config = BUY_RANGE_CONFIG["aggressive"]
-    std_config = BUY_RANGE_CONFIG["standard"]
+    # Step 1: Calculate anchor
+    anchor_price, anchor_notes = calculate_anchor_price(data, company_type)
+    notes.extend(anchor_notes)
     
-    # Calculate aggressive zone: [anchor * (1-3%), anchor * (1+5%)]
-    agg_low = anchor_price * (1 + agg_config["from_anchor_pct"])
-    agg_high = anchor_price * (1 + agg_config["to_anchor_pct"])
+    # Step 2: Get drawdown configuration
+    drawdowns = config["drawdown_from_anchor"]
+    allocations = config["allocation"]
     
-    # Calculate standard zone: [anchor * (1-10%), anchor * (1-3%)]
-    std_low = anchor_price * (1 + std_config["from_anchor_pct"])
-    std_high = anchor_price * (1 + std_config["to_anchor_pct"])
+    # Step 3: Volatility adjustment
+    vol_factor = get_volatility_factor(data.volatility) if data.volatility > 0 else 1.0
+    if vol_factor != 1.0:
+        notes.append(f"Volatility={data.volatility*100:.0f}% → factor={vol_factor:.2f}")
     
-    # Determine current zone
-    if price > agg_high:
-        current_zone = "above"
-        in_aggressive = False
-        in_standard = False
-    elif price >= agg_low:
+    adjusted_drawdowns = {k: v * vol_factor for k, v in drawdowns.items()}
+    
+    # Step 4: Calculate three-tier zones
+    # Aggressive: anchor +3% ~ anchor - aggressive_drawdown
+    aggressive_high = anchor_price * 1.03
+    aggressive_low = anchor_price * (1 - adjusted_drawdowns["aggressive"])
+    
+    # Standard: aggressive_low ~ anchor - standard_drawdown
+    standard_high = aggressive_low
+    standard_low = anchor_price * (1 - adjusted_drawdowns["standard"])
+    
+    # Conservative: standard_low ~ anchor - conservative_drawdown
+    conservative_high = standard_low
+    conservative_low = anchor_price * (1 - adjusted_drawdowns["conservative"])
+    
+    notes.append(f"Zones (vol_factor={vol_factor:.2f}):")
+    notes.append(f"  Aggressive: ¥{aggressive_low:,.0f} - ¥{aggressive_high:,.0f}")
+    notes.append(f"  Standard:   ¥{standard_low:,.0f} - ¥{standard_high:,.0f}")
+    notes.append(f"  Conservative: ¥{conservative_low:,.0f} - ¥{conservative_high:,.0f}")
+    
+    # Step 5: Determine current zone
+    if current_price > aggressive_high:
+        current_zone = "above_range"
+        in_agg, in_std, in_con = False, False, False
+    elif current_price >= aggressive_low:
         current_zone = "aggressive"
-        in_aggressive = True
-        in_standard = False
-    elif price >= std_low:
+        in_agg, in_std, in_con = True, False, False
+    elif current_price >= standard_low:
         current_zone = "standard"
-        in_aggressive = False
-        in_standard = True
+        in_agg, in_std, in_con = False, True, False
+    elif current_price >= conservative_low:
+        current_zone = "conservative"
+        in_agg, in_std, in_con = False, False, True
     else:
-        current_zone = "below"
-        in_aggressive = False
-        in_standard = False
+        current_zone = "below_range"
+        in_agg, in_std, in_con = False, False, False
     
-    # Create BuyZone objects
-    aggressive_zone = BuyZone(
-        label=agg_config["label"],
-        price_low=agg_low,
-        price_high=agg_high,
-        allocation=agg_config["allocation"],
-        is_current=in_aggressive
+    # Step 6: Create tier objects
+    aggressive = BuyRangeTier(
+        price_low=aggressive_low,
+        price_high=aggressive_high,
+        suggested_allocation=allocations["aggressive"],
+        tier_label="aggressive",
+        is_current=in_agg,
+    )
+    standard = BuyRangeTier(
+        price_low=standard_low,
+        price_high=standard_high,
+        suggested_allocation=allocations["standard"],
+        tier_label="standard",
+        is_current=in_std,
+    )
+    conservative = BuyRangeTier(
+        price_low=conservative_low,
+        price_high=conservative_high,
+        suggested_allocation=allocations["conservative"],
+        tier_label="conservative",
+        is_current=in_con,
     )
     
-    standard_zone = BuyZone(
-        label=std_config["label"],
-        price_low=std_low,
-        price_high=std_high,
-        allocation=std_config["allocation"],
-        is_current=in_standard
-    )
+    # Step 7: Generate action text
+    action_text = _generate_action_text(current_price, current_zone, aggressive, standard, conservative)
     
-    # Calculate distance to aggressive zone upper
-    distance_to_aggressive = (price - agg_high) / agg_high
+    # Step 8: Determine primary support
+    primary_support = data.ma_200 if data.ma_200 > 0 else data.ma_120
     
-    # Generate action text with anchor type consideration
-    if anchor_type == "MA50_FAR":
-        # Price is extended from all moving averages, give conservative advice
-        if current_zone == "above":
-            action = f"Price extended from MA50, wait for deeper pullback to ¥{std_low:,.0f}"
-        elif current_zone == "aggressive":
-            action = "In aggressive zone but price extended, consider 25% position only"
-        elif current_zone == "standard":
-            action = "In standard zone, can open 50% position"
-        else:
-            action = "Below standard zone, verify fundamentals"
-    else:
-        # Normal logic
-        if current_zone == "above":
-            action = f"Price too high, wait for pullback to ¥{agg_high:,.0f}"
-        elif current_zone == "aggressive":
-            action = "In aggressive zone, can open 50% position"
-        elif current_zone == "standard":
-            action = "In standard zone, can add to 100% position"
-        else:
-            action = "Below standard zone, verify fundamentals before heavy position"
+    # Calculate distance to aggressive zone
+    distance_to_aggressive = (current_price - aggressive_high) / aggressive_high
     
+    # Return compatible dictionary format
     return {
         "anchor_price": anchor_price,
-        "anchor_type": anchor_type,
-        "aggressive": aggressive_zone,
-        "standard": standard_zone,
+        "anchor_type": "weighted_average",
+        "aggressive": aggressive,
+        "standard": standard,
+        "conservative": conservative,
         "current_zone": current_zone,
-        "action": action,
-        "distance_to_aggressive": distance_to_aggressive
+        "action": action_text,
+        "distance_to_aggressive": distance_to_aggressive,
+        "primary_support": primary_support,
+        "calculation_notes": notes,
+        "company_type": company_type,
     }
+
+
+def _generate_action_text(
+    price: float,
+    zone: str,
+    aggressive: BuyRangeTier,
+    standard: BuyRangeTier,
+    conservative: BuyRangeTier,
+) -> str:
+    """Generate action guidance text."""
+    if zone == "above_range":
+        gap_pct = (price - aggressive.price_high) / aggressive.price_high * 100
+        return f"Above range (+{gap_pct:.1f}%). Wait for ¥{aggressive.price_high:,.0f} or lower."
+    
+    elif zone == "aggressive":
+        return f"Aggressive zone. Consider {aggressive.suggested_allocation} position."
+    
+    elif zone == "standard":
+        agg_pct = _parse_pct(aggressive.suggested_allocation)
+        std_pct = _parse_pct(standard.suggested_allocation)
+        cumulative = agg_pct + std_pct
+        return f"Standard zone. Consider {cumulative:.0f}% cumulative position."
+    
+    elif zone == "conservative":
+        return f"Conservative zone - excellent entry. Consider full position."
+    
+    else:  # below_range
+        return f"Below range (¥{conservative.price_low:,.0f}). Verify thesis before buying."
+
+
+def _parse_pct(s: str) -> float:
+    """Parse percentage string '25%' -> 25.0"""
+    match = re.search(r'(\d+)', s)
+    return float(match.group(1)) if match else 0.0
+
+
+def get_cumulative_allocation(zone: str, buy_range: Dict[str, Any]) -> float:
+    """
+    Get cumulative position allocation for current zone.
+    
+    Logic: Buy more as price drops
+    - aggressive: 25%
+    - standard: 25%+40%=65%
+    - conservative: 25%+40%+35%=100%
+    """
+    if zone == "above_range":
+        return 0.0
+    
+    agg = buy_range["aggressive"]
+    std = buy_range["standard"]
+    con = buy_range["conservative"]
+    
+    aggr_pct = _parse_pct(agg.suggested_allocation) / 100
+    std_pct = _parse_pct(std.suggested_allocation) / 100
+    cons_pct = _parse_pct(con.suggested_allocation) / 100
+    
+    if zone == "aggressive":
+        return aggr_pct
+    elif zone == "standard":
+        return aggr_pct + std_pct
+    elif zone == "conservative":
+        return aggr_pct + std_pct + cons_pct
+    elif zone == "below_range":
+        return 1.0
+    
+    return 0.0

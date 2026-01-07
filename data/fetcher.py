@@ -183,7 +183,22 @@ def fetch_jp_stock(symbol: str) -> JPTickerData:
         ma_5 = close_prices.rolling(window=5).mean().iloc[-1] if len(close_prices) >= 5 else current_price
         ma_20 = close_prices.rolling(window=20).mean().iloc[-1] if len(close_prices) >= 20 else current_price
         ma_50 = close_prices.rolling(window=50).mean().iloc[-1] if len(close_prices) >= 50 else current_price
-        ma_200 = close_prices.rolling(window=200).mean().iloc[-1] if len(close_prices) >= 200 else current_price
+        ma_120 = close_prices.rolling(window=120).mean().iloc[-1] if len(close_prices) >= 120 else current_price * 0.90
+        ma_200 = close_prices.rolling(window=200).mean().iloc[-1] if len(close_prices) >= 200 else current_price * 0.85
+        
+        # Calculate 90-day high (for pullback anchor)
+        if isinstance(history.columns, pd.MultiIndex):
+            high_prices = history["High"][symbol] if symbol in history["High"].columns else history["High"].iloc[:, 0]
+        else:
+            high_prices = history["High"]
+        high_90d = high_prices.tail(90).max() if len(high_prices) >= 90 else high_prices.max()
+        
+        # Calculate annualized volatility
+        if len(close_prices) >= 20:
+            daily_returns = close_prices.pct_change().dropna()
+            volatility = daily_returns.std() * (252 ** 0.5)  # Annualized
+        else:
+            volatility = 0.30  # Default 30%
         
         # Calculate RSI
         rsi_14 = _calculate_rsi(close_prices, 14)
@@ -239,7 +254,10 @@ def fetch_jp_stock(symbol: str) -> JPTickerData:
             ma_5=ma_5,
             ma_20=ma_20,
             ma_50=ma_50,
+            ma_120=ma_120,
             ma_200=ma_200,
+            high_90d=high_90d,
+            volatility=volatility,
             rsi_14=rsi_14,
             bb_upper=bb["upper"],
             bb_middle=bb["middle"],

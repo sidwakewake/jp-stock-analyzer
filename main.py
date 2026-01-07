@@ -34,6 +34,29 @@ from utils.formatter import (
 from config import SCORE_WEIGHTS
 
 
+def classify_company_type(data) -> str:
+    """
+    Classify company type for buy range calculation.
+    
+    Type A: Stable Profitable (PE>0, low growth)
+    Type B: Growth (PE>0, high growth)
+    Type C: High Growth (PE<0 or None, high revenue growth)
+    Type D: Cyclical (energy, materials, industrials)
+    """
+    # Cyclical sector detection
+    cyclical_sectors = ["Energy", "Materials", "Industrials", "Utilities"]
+    if data.sector in cyclical_sectors:
+        return "D"
+    
+    # Based on profitability
+    is_profitable = data.pe_ttm is not None and data.pe_ttm > 0
+    
+    if is_profitable:
+        return "A"  # Default stable type
+    else:
+        return "C"  # Unprofitable / high growth
+
+
 def analyze_single_stock(symbol: str) -> dict:
     """
     Analyze a single stock
@@ -46,59 +69,62 @@ def analyze_single_stock(symbol: str) -> dict:
             "buy_range": dict,
             "total_score": float,
             "signal": str,
-            "warning": str or None
+            "warning": str or None,
+            "company_type": str
         }
     """
     # 1. Fetch data
     data = fetch_jp_stock(symbol)
     
-    # 2. Technical analysis
+    # 2. Classify company type
+    company_type = classify_company_type(data)
+    
+    # 3. Technical analysis
     technical = calculate_technical_score(data)
     
-    # 3. Valuation analysis
+    # 4. Valuation analysis
     valuation = calculate_valuation_score(data)
     
-    # 4. Buy range calculation
-    buy_range_result = calculate_buy_range(data)
+    # 5. Buy range calculation (v2.0 with company type)
+    buy_range_result = calculate_buy_range(data, company_type)
     
-    # 5. Combined score (Technical 60% + Valuation 40%)
+    # 6. Combined score (Technical 60% + Valuation 40%)
     total_score = (technical["score"] * SCORE_WEIGHTS["technical"] + 
                    valuation["score"] * SCORE_WEIGHTS["valuation"])
     
-    # 6. Combined signal with valuation veto
+    # 7. Combined signal with valuation veto
     current_zone = buy_range_result["current_zone"]
     pe_percentile = valuation.get("pe_percentile", 50)
     val_score = valuation["score"]
     warning = None
     
     # === Valuation veto logic ===
-    # Downgrade buy signal when valuation is at historical high
     valuation_veto = False
     if pe_percentile >= 80 and val_score < 50:
         valuation_veto = True
         warning = f"Valuation at historical high (PE percentile: {pe_percentile:.0f}%)"
     
-    # 7. Determine signal
+    # 8. Determine signal (v2.0 zone names)
     if valuation_veto:
-        # Valuation too high, max HOLD, no buy signal
-        if current_zone == "above":
+        if current_zone == "above_range":
             signal = "WAIT"
         else:
             signal = "HOLD"
             warning = f"{warning}. Consider smaller position or wait for pullback."
-    elif total_score >= 75 and current_zone in ["aggressive", "standard", "below"]:
+    elif total_score >= 75 and current_zone in ["aggressive", "standard", "conservative"]:
         signal = "STRONG_BUY"
-    elif total_score >= 60 and current_zone != "above":
+    elif total_score >= 60 and current_zone != "above_range":
         signal = "BUY"
     elif total_score >= 50:
         signal = "HOLD"
-    elif current_zone == "above":
+    elif current_zone == "above_range":
         signal = "WAIT"
     else:
         signal = "CAUTION"
     
     return {
         "data": data,
+        "company_type": company_type,
         "technical": technical,
         "valuation": valuation,
         "buy_range": buy_range_result,

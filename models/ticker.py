@@ -27,7 +27,12 @@ class JPTickerData:
     ma_5: float                    # 5-day MA
     ma_20: float                   # 20-day MA
     ma_50: float                   # 50-day MA
+    ma_120: float                  # 120-day MA (new for v2.0)
     ma_200: float                  # 200-day MA
+    
+    # === New for v2.0 ===
+    high_90d: float                # 90-day high (for pullback anchor)
+    volatility: float              # Annualized volatility
     
     # === Technical Indicators ===
     rsi_14: float                  # RSI(14)

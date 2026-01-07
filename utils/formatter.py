@@ -150,34 +150,41 @@ def format_stock_analysis(data: JPTickerData, technical: Dict, valuation: Dict, 
         lines.append(f" └─ Dividend Yield: N/A")
     lines.append("")
     
-    # === Buy Range ===
+    # === Buy Range (v2.0 with 3 tiers) ===
     anchor = buy_range["anchor_price"]
     anchor_type = buy_range["anchor_type"]
     agg = buy_range["aggressive"]
     std = buy_range["standard"]
+    con = buy_range.get("conservative")  # v2.0: conservative tier
     current_zone = buy_range["current_zone"]
+    company_type = buy_range.get("company_type", "DEFAULT")
     
-    # Format anchor type display (hide _FAR suffix for cleaner output)
-    anchor_display = anchor_type.replace("_FAR", "")
-    lines.append(f" Buy Range (Anchor: {anchor_display} {format_currency(anchor)})")
-    lines.append(" ┌─────────────────┬──────────────────────────┬────────┐")
-    lines.append(" │ Zone            │ Price Range              │ Alloc  │")
-    lines.append(" ├─────────────────┼──────────────────────────┼────────┤")
+    # Format anchor type display
+    anchor_display = anchor_type.replace("_FAR", "").replace("weighted_average", "Weighted Avg")
+    lines.append(f" Buy Range (Type {company_type}, Anchor: {anchor_display} {format_currency(anchor)})")
+    lines.append(" ┌──────────────────┬──────────────────────────┬────────┐")
+    lines.append(" │ Zone             │ Price Range              │ Alloc  │")
+    lines.append(" ├──────────────────┼──────────────────────────┼────────┤")
     
     # Aggressive zone row
     agg_mark = " ← Current" if agg.is_current else ""
-    lines.append(f" │ Aggressive Zone │ {format_currency(agg.price_low):>10} - {format_currency(agg.price_high):<10} │ {agg.allocation:>6} │{agg_mark}")
+    lines.append(f" │ Aggressive       │ {format_currency(agg.price_low):>10} - {format_currency(agg.price_high):<10} │ {agg.suggested_allocation:>6} │{agg_mark}")
     
     # Standard zone row
     std_mark = " ← Current" if std.is_current else ""
-    lines.append(f" │ Standard Zone   │ {format_currency(std.price_low):>10} - {format_currency(std.price_high):<10} │ {std.allocation:>6} │{std_mark}")
+    lines.append(f" │ Standard         │ {format_currency(std.price_low):>10} - {format_currency(std.price_high):<10} │ {std.suggested_allocation:>6} │{std_mark}")
     
-    lines.append(" └─────────────────┴──────────────────────────┴────────┘")
+    # Conservative zone row (v2.0)
+    if con:
+        con_mark = " ← Current" if con.is_current else ""
+        lines.append(f" │ Conservative     │ {format_currency(con.price_low):>10} - {format_currency(con.price_high):<10} │ {con.suggested_allocation:>6} │{con_mark}")
+    
+    lines.append(" └──────────────────┴──────────────────────────┴────────┘")
     
     # Current zone status
-    if current_zone == "above":
+    if current_zone == "above_range":
         dist = buy_range["distance_to_aggressive"]
-        lines.append(f" Current price {format_currency(data.current_price)} above aggressive zone ({format_percentage(dist)})")
+        lines.append(f" Current price {format_currency(data.current_price)} above range ({format_percentage(dist)})")
     lines.append("")
     
     # === Recommendation ===
@@ -188,17 +195,17 @@ def format_stock_analysis(data: JPTickerData, technical: Dict, valuation: Dict, 
     valuation_veto = pe_percentile >= 80 and val_score < 50
     
     if valuation_veto:
-        if current_zone == "above":
+        if current_zone == "above_range":
             signal = "WAIT"
         else:
             signal = "HOLD"
-    elif total_score >= 75 and current_zone in ["aggressive", "standard", "below"]:
+    elif total_score >= 75 and current_zone in ["aggressive", "standard", "conservative"]:
         signal = "STRONG_BUY"
-    elif total_score >= 60 and current_zone != "above":
+    elif total_score >= 60 and current_zone != "above_range":
         signal = "BUY"
     elif total_score >= 50:
         signal = "HOLD"
-    elif current_zone == "above":
+    elif current_zone == "above_range":
         signal = "WAIT"
     else:
         signal = "CAUTION"
@@ -275,20 +282,24 @@ def format_summary_table(results: List[Dict]) -> str:
             zone_str = "Aggressive"
         elif zone == "standard":
             zone_str = "Standard"
-        elif zone == "above":
+        elif zone == "conservative":
+            zone_str = "Conservative"
+        elif zone == "above_range":
             zone_str = "Above Range"
         else:
             zone_str = "Below Range"
         
         signal = result.get("signal", tech["signal"])
         
-        # Short action
-        if zone == "above":
+        # Short action (v2.0: cumulative allocation)
+        if zone == "above_range":
             action = "Wait"
         elif zone == "aggressive":
-            action = "Open 50%"
+            action = "Open 25%"
         elif zone == "standard":
-            action = "Add to 100%"
+            action = "Add to 65%"
+        elif zone == "conservative":
+            action = "Full 100%"
         else:
             action = "Verify"
         
