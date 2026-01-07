@@ -84,7 +84,7 @@ def format_percentage(value: float, with_sign: bool = True) -> str:
         return f"{pct:.{decimals}f}%"
 
 
-def format_stock_analysis(data: JPTickerData, technical: Dict, valuation: Dict, buy_range: Dict) -> str:
+def format_stock_analysis(data: JPTickerData, technical: Dict, valuation: Dict, buy_range: Dict, warning: str = None) -> str:
     """
     Format complete analysis output for a single stock
     """
@@ -157,7 +157,9 @@ def format_stock_analysis(data: JPTickerData, technical: Dict, valuation: Dict, 
     std = buy_range["standard"]
     current_zone = buy_range["current_zone"]
     
-    lines.append(f" Buy Range (Anchor: {anchor_type} {format_currency(anchor)})")
+    # Format anchor type display (hide _FAR suffix for cleaner output)
+    anchor_display = anchor_type.replace("_FAR", "")
+    lines.append(f" Buy Range (Anchor: {anchor_display} {format_currency(anchor)})")
     lines.append(" ┌─────────────────┬──────────────────────────┬────────┐")
     lines.append(" │ Zone            │ Price Range              │ Alloc  │")
     lines.append(" ├─────────────────┼──────────────────────────┼────────┤")
@@ -179,8 +181,18 @@ def format_stock_analysis(data: JPTickerData, technical: Dict, valuation: Dict, 
     lines.append("")
     
     # === Recommendation ===
+    pe_percentile = valuation.get("pe_percentile", 50)
     total_score = technical["score"] * 0.6 + valuation["score"] * 0.4
-    if total_score >= 75 and current_zone in ["aggressive", "standard", "below"]:
+    
+    # Valuation veto logic
+    valuation_veto = pe_percentile >= 80 and val_score < 50
+    
+    if valuation_veto:
+        if current_zone == "above":
+            signal = "WAIT"
+        else:
+            signal = "HOLD"
+    elif total_score >= 75 and current_zone in ["aggressive", "standard", "below"]:
         signal = "STRONG_BUY"
     elif total_score >= 60 and current_zone != "above":
         signal = "BUY"
@@ -193,6 +205,13 @@ def format_stock_analysis(data: JPTickerData, technical: Dict, valuation: Dict, 
     
     action = buy_range["action"]
     lines.append(f" ★ Recommendation: {signal} - {action}")
+    
+    # Display warning (if any)
+    if warning:
+        lines.append(f" ⚠ Warning: {warning}")
+    elif valuation_veto:
+        lines.append(f" ⚠ Warning: Valuation at historical high (PE percentile: {pe_percentile:.0f}%), signal downgraded")
+    
     lines.append("─" * 80)
     
     return "\n".join(lines)

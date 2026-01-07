@@ -17,12 +17,12 @@ def calculate_pe_percentile(current_pe: float, pe_history: list = None) -> float
     
     Args:
         current_pe: Current PE
-        pe_history: PE history list (optional, use default range if None)
+        pe_history: PE history list (optional, use dynamic range if None)
     
     Returns:
         Percentile (0-100), 0 = cheapest, 100 = most expensive
     """
-    if current_pe is None:
+    if current_pe is None or current_pe <= 0:
         return 50.0  # Return neutral if no PE data
     
     if pe_history and len(pe_history) > 0:
@@ -30,9 +30,20 @@ def calculate_pe_percentile(current_pe: float, pe_history: list = None) -> float
         count_below = sum(1 for pe in pe_history if pe < current_pe)
         percentile = (count_below / len(pe_history)) * 100
     else:
-        # Use default range
-        pe_floor = DEFAULT_VALUATION["pe_floor"]
-        pe_ceiling = DEFAULT_VALUATION["pe_ceiling"]
+        # Dynamic range adjustment based on current PE level
+        pe_floor = DEFAULT_VALUATION["pe_floor"]  # 8
+        default_ceiling = DEFAULT_VALUATION["pe_ceiling"]  # 30
+        
+        # Layer evaluation based on PE level
+        if current_pe <= default_ceiling:
+            # PE in normal range, use default interval
+            pe_ceiling = default_ceiling
+        elif current_pe <= 50:
+            # PE is high, extend range to 50
+            pe_ceiling = 50
+        else:
+            # PE is very high, extend range to 1.2x current PE
+            pe_ceiling = current_pe * 1.2
         
         if pe_ceiling == pe_floor:
             return 50.0

@@ -45,7 +45,8 @@ def analyze_single_stock(symbol: str) -> dict:
             "valuation": dict,
             "buy_range": dict,
             "total_score": float,
-            "signal": str
+            "signal": str,
+            "warning": str or None
         }
     """
     # 1. Fetch data
@@ -64,10 +65,28 @@ def analyze_single_stock(symbol: str) -> dict:
     total_score = (technical["score"] * SCORE_WEIGHTS["technical"] + 
                    valuation["score"] * SCORE_WEIGHTS["valuation"])
     
-    # 6. Combined signal
+    # 6. Combined signal with valuation veto
     current_zone = buy_range_result["current_zone"]
+    pe_percentile = valuation.get("pe_percentile", 50)
+    val_score = valuation["score"]
+    warning = None
     
-    if total_score >= 75 and current_zone in ["aggressive", "standard", "below"]:
+    # === Valuation veto logic ===
+    # Downgrade buy signal when valuation is at historical high
+    valuation_veto = False
+    if pe_percentile >= 80 and val_score < 50:
+        valuation_veto = True
+        warning = f"Valuation at historical high (PE percentile: {pe_percentile:.0f}%)"
+    
+    # 7. Determine signal
+    if valuation_veto:
+        # Valuation too high, max HOLD, no buy signal
+        if current_zone == "above":
+            signal = "WAIT"
+        else:
+            signal = "HOLD"
+            warning = f"{warning}. Consider smaller position or wait for pullback."
+    elif total_score >= 75 and current_zone in ["aggressive", "standard", "below"]:
         signal = "STRONG_BUY"
     elif total_score >= 60 and current_zone != "above":
         signal = "BUY"
@@ -84,7 +103,8 @@ def analyze_single_stock(symbol: str) -> dict:
         "valuation": valuation,
         "buy_range": buy_range_result,
         "total_score": total_score,
-        "signal": signal
+        "signal": signal,
+        "warning": warning
     }
 
 
@@ -136,7 +156,8 @@ def main():
                     result["data"],
                     result["technical"],
                     result["valuation"],
-                    result["buy_range"]
+                    result["buy_range"],
+                    result.get("warning")
                 ))
         except Exception as e:
             print(f"[ERROR] {symbol}: {str(e)}\n")

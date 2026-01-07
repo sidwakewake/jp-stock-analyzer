@@ -194,7 +194,20 @@ def fetch_jp_stock(symbol: str) -> JPTickerData:
         # Fundamentals
         pe_ttm = info.get("trailingPE")
         pb = info.get("priceToBook")
-        dividend_yield = info.get("dividendYield")
+        
+        # Validate dividend_yield (normal range 0-15%)
+        dividend_yield_raw = info.get("dividendYield")
+        if dividend_yield_raw is not None:
+            # yfinance returns decimal form, e.g. 0.03 = 3%
+            if dividend_yield_raw > 0.15:  # Over 15% is abnormal
+                dividend_yield = None
+            elif dividend_yield_raw < 0:
+                dividend_yield = None
+            else:
+                dividend_yield = dividend_yield_raw
+        else:
+            dividend_yield = None
+        
         market_cap_raw = info.get("marketCap")
         market_cap = market_cap_raw / 1e9 if market_cap_raw else None  # Convert to billions
         

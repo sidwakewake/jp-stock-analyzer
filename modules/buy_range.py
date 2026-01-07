@@ -30,7 +30,7 @@ def calculate_anchor_price(data: JPTickerData) -> Tuple[float, str]:
         (anchor_price, anchor_type)
     
     Anchor logic (priority):
-    1. MA200 (if trend is healthy)
+    1. MA200 (if trend is healthy and price within reasonable range)
     2. MA50 (if MA200 is too far)
     3. Bollinger Band lower (if oversold)
     """
@@ -43,8 +43,8 @@ def calculate_anchor_price(data: JPTickerData) -> Tuple[float, str]:
     if ma200 and ma200 > 0:
         distance_ma200 = (price - ma200) / ma200
         
-        # If price is above MA200 and within 15%, use MA200
-        if distance_ma200 >= 0 and distance_ma200 < 0.15:
+        # If price is within +15% of MA200, use MA200 (healthy uptrend)
+        if 0 <= distance_ma200 < 0.15:
             return (ma200, "MA200")
         
         # If price is below MA200, still use MA200 (bottom fishing)
@@ -53,7 +53,13 @@ def calculate_anchor_price(data: JPTickerData) -> Tuple[float, str]:
     
     # Fallback to MA50 if MA200 is too far or unavailable
     if ma50 and ma50 > 0:
-        return (ma50, "MA50")
+        distance_ma50 = (price - ma50) / ma50
+        # Only use MA50 as anchor if price is within +10%
+        if distance_ma50 < 0.10:
+            return (ma50, "MA50")
+        else:
+            # Price is extended from MA50 too, mark as FAR
+            return (ma50, "MA50_FAR")
     
     # Last resort: Bollinger Band lower
     if bb_lower and bb_lower > 0:
@@ -131,15 +137,27 @@ def calculate_buy_range(data: JPTickerData) -> Dict[str, Any]:
     # Calculate distance to aggressive zone upper
     distance_to_aggressive = (price - agg_high) / agg_high
     
-    # Generate action text
-    if current_zone == "above":
-        action = f"Price too high, wait for pullback to ¥{agg_high:,.0f}"
-    elif current_zone == "aggressive":
-        action = "In aggressive zone, can open 50% position"
-    elif current_zone == "standard":
-        action = "In standard zone, can add to 100% position"
+    # Generate action text with anchor type consideration
+    if anchor_type == "MA50_FAR":
+        # Price is extended from all moving averages, give conservative advice
+        if current_zone == "above":
+            action = f"Price extended from MA50, wait for deeper pullback to ¥{std_low:,.0f}"
+        elif current_zone == "aggressive":
+            action = "In aggressive zone but price extended, consider 25% position only"
+        elif current_zone == "standard":
+            action = "In standard zone, can open 50% position"
+        else:
+            action = "Below standard zone, verify fundamentals"
     else:
-        action = "Below standard zone, verify fundamentals before heavy position"
+        # Normal logic
+        if current_zone == "above":
+            action = f"Price too high, wait for pullback to ¥{agg_high:,.0f}"
+        elif current_zone == "aggressive":
+            action = "In aggressive zone, can open 50% position"
+        elif current_zone == "standard":
+            action = "In standard zone, can add to 100% position"
+        else:
+            action = "Below standard zone, verify fundamentals before heavy position"
     
     return {
         "anchor_price": anchor_price,
