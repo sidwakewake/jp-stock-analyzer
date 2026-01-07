@@ -74,9 +74,10 @@ Analyzing: 7011.T, 8316.T
 |-------------|------|--------|
 | ≥75 | In Range | STRONG_BUY |
 | ≥60 | In Range | BUY |
-| ≥50 | Any | HOLD |
-| Any | Above | WAIT |
-| <50 | Any | CAUTION |
+| ≥45 | In Range | BUY |
+| Any | Above Range | WAIT |
+| Any | In Range + PE%≥80 | CAUTION |
+| <45 | Any | AVOID |
 
 ## License
 

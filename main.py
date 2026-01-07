@@ -92,35 +92,30 @@ def analyze_single_stock(symbol: str) -> dict:
     total_score = (technical["score"] * SCORE_WEIGHTS["technical"] + 
                    valuation["score"] * SCORE_WEIGHTS["valuation"])
     
-    # 7. Combined signal with valuation veto
+    # 7. Determine signal (simplified - no HOLD)
     current_zone = buy_range_result["current_zone"]
     pe_percentile = valuation.get("pe_percentile", 50)
     val_score = valuation["score"]
     warning = None
     
-    # === Valuation veto logic ===
-    valuation_veto = False
-    if pe_percentile >= 80 and val_score < 50:
-        valuation_veto = True
-        warning = f"Valuation at historical high (PE percentile: {pe_percentile:.0f}%)"
-    
-    # 8. Determine signal (v2.0 zone names)
-    if valuation_veto:
-        if current_zone == "above_range":
-            signal = "WAIT"
-        else:
-            signal = "HOLD"
-            warning = f"{warning}. Consider smaller position or wait for pullback."
-    elif total_score >= 75 and current_zone in ["aggressive", "standard", "conservative"]:
-        signal = "STRONG_BUY"
-    elif total_score >= 60 and current_zone != "above_range":
-        signal = "BUY"
-    elif total_score >= 50:
-        signal = "HOLD"
-    elif current_zone == "above_range":
+    # === Signal logic (simplified) ===
+    if current_zone == "above_range":
+        # Above range = always WAIT
         signal = "WAIT"
-    else:
+        if pe_percentile >= 80:
+            warning = f"PE percentile {pe_percentile:.0f}% - wait for better entry"
+    elif pe_percentile >= 80 and val_score < 50:
+        # In range but valuation too high = CAUTION
         signal = "CAUTION"
+        warning = f"Valuation at historical high (PE percentile: {pe_percentile:.0f}%)"
+    elif total_score >= 75:
+        signal = "STRONG_BUY"
+    elif total_score >= 60:
+        signal = "BUY"
+    elif total_score >= 45:
+        signal = "BUY"  # Buyable but no rush
+    else:
+        signal = "AVOID"
     
     return {
         "data": data,

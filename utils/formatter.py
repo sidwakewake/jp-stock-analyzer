@@ -191,24 +191,19 @@ def format_stock_analysis(data: JPTickerData, technical: Dict, valuation: Dict, 
     pe_percentile = valuation.get("pe_percentile", 50)
     total_score = technical["score"] * 0.6 + valuation["score"] * 0.4
     
-    # Valuation veto logic
-    valuation_veto = pe_percentile >= 80 and val_score < 50
-    
-    if valuation_veto:
-        if current_zone == "above_range":
-            signal = "WAIT"
-        else:
-            signal = "HOLD"
-    elif total_score >= 75 and current_zone in ["aggressive", "standard", "conservative"]:
-        signal = "STRONG_BUY"
-    elif total_score >= 60 and current_zone != "above_range":
-        signal = "BUY"
-    elif total_score >= 50:
-        signal = "HOLD"
-    elif current_zone == "above_range":
+    # Simplified signal logic (no HOLD)
+    if current_zone == "above_range":
         signal = "WAIT"
-    else:
+    elif pe_percentile >= 80 and val_score < 50:
         signal = "CAUTION"
+    elif total_score >= 75:
+        signal = "STRONG_BUY"
+    elif total_score >= 60:
+        signal = "BUY"
+    elif total_score >= 45:
+        signal = "BUY"
+    else:
+        signal = "AVOID"
     
     action = buy_range["action"]
     lines.append(f" ★ Recommendation: {signal} - {action}")
@@ -216,8 +211,8 @@ def format_stock_analysis(data: JPTickerData, technical: Dict, valuation: Dict, 
     # Display warning (if any)
     if warning:
         lines.append(f" ⚠ Warning: {warning}")
-    elif valuation_veto:
-        lines.append(f" ⚠ Warning: Valuation at historical high (PE percentile: {pe_percentile:.0f}%), signal downgraded")
+    elif pe_percentile >= 80 and val_score < 50:
+        lines.append(f" ⚠ Warning: Valuation at historical high (PE percentile: {pe_percentile:.0f}%)")
     
     lines.append("─" * 80)
     
@@ -291,9 +286,13 @@ def format_summary_table(results: List[Dict]) -> str:
         
         signal = result.get("signal", tech["signal"])
         
-        # Short action (v2.0: cumulative allocation)
-        if zone == "above_range":
+        # Short action (based on signal and zone)
+        if signal == "WAIT":
             action = "Wait"
+        elif signal == "CAUTION":
+            action = "Caution"
+        elif signal == "AVOID":
+            action = "Avoid"
         elif zone == "aggressive":
             action = "Open 25%"
         elif zone == "standard":
