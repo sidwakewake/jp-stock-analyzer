@@ -258,7 +258,7 @@ def format_summary_table(results: List[Dict]) -> str:
     lines.append("=" * 80)
     
     # Header
-    lines.append(f" {'Symbol':<10} | {'Price':>12} | {'Tech':>4} | {'Val':>4} | {'Zone':<16} | {'Signal':<10} | Action")
+    lines.append(f" {'Symbol':<10} | {'Price':>12} | {'Tech':>4} | {'Val':>4} | {'Zone':<16} | {'Signal':<10} | Target")
     lines.append("-" * 10 + "-+-" + "-" * 12 + "-+-" + "-" * 4 + "-+-" + "-" * 4 + "-+-" + "-" * 16 + "-+-" + "-" * 10 + "-+-" + "-" * 14)
     
     for result in results:
@@ -286,23 +286,20 @@ def format_summary_table(results: List[Dict]) -> str:
         
         signal = result.get("signal", tech["signal"])
         
-        # Short action (based on signal and zone)
-        if signal == "WAIT":
-            action = "Wait"
-        elif signal == "CAUTION":
-            action = "Caution"
-        elif signal == "AVOID":
-            action = "Avoid"
+        # Target price (aggressive zone high as entry target)
+        agg_high = buy["aggressive"].price_high
+        if zone == "above_range":
+            target = f"≤{format_currency(agg_high)}"
         elif zone == "aggressive":
-            action = "Open 25%"
+            target = "In Zone"
         elif zone == "standard":
-            action = "Add to 65%"
+            target = "In Zone"
         elif zone == "conservative":
-            action = "Full 100%"
+            target = "In Zone"
         else:
-            action = "Verify"
+            target = "Below"
         
-        lines.append(f" {symbol:<10} | {price:>12} | {tech_score:>4.0f} | {val_score:>4.0f} | {zone_str:<16} | {signal:<10} | {action}")
+        lines.append(f" {symbol:<10} | {price:>12} | {tech_score:>4.0f} | {val_score:>4.0f} | {zone_str:<16} | {signal:<10} | {target}")
     
     lines.append("=" * 80)
     
