@@ -348,17 +348,17 @@ def calculate_technical_score(data: JPTickerData) -> Dict[str, Any]:
     # === Total Score ===
     total_score = rsi_score + ma_score + bb_score + support_score
     
-    # === Determine Signal ===
+    # === Determine Signal (descriptive, not actionable) ===
     if total_score >= 85:
-        signal = "STRONG_BUY"
+        signal = "Strong"
     elif total_score >= 70:
-        signal = "BUY"
+        signal = "Bullish"
     elif total_score >= 50:
-        signal = "HOLD"
+        signal = "Neutral"
     elif total_score >= 35:
-        signal = "WAIT"
+        signal = "Weak"
     else:
-        signal = "SELL"
+        signal = "Bearish"
     
     return {
         "score": total_score,
