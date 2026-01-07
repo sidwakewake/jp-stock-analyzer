@@ -196,15 +196,20 @@ def fetch_jp_stock(symbol: str) -> JPTickerData:
         pb = info.get("priceToBook")
         
         # Validate dividend_yield (normal range 0-15%)
+        # yfinance sometimes returns wrong dividendYield, prefer trailingAnnualDividendYield
         dividend_yield_raw = info.get("dividendYield")
+        trailing_yield = info.get("trailingAnnualDividendYield")
+        
         if dividend_yield_raw is not None:
             # yfinance returns decimal form, e.g. 0.03 = 3%
-            if dividend_yield_raw > 0.15:  # Over 15% is abnormal
-                dividend_yield = None
+            if dividend_yield_raw > 0.15:  # Over 15% is abnormal, use trailing instead
+                dividend_yield = trailing_yield if trailing_yield and 0 < trailing_yield < 0.15 else None
             elif dividend_yield_raw < 0:
                 dividend_yield = None
             else:
                 dividend_yield = dividend_yield_raw
+        elif trailing_yield is not None and 0 < trailing_yield < 0.15:
+            dividend_yield = trailing_yield
         else:
             dividend_yield = None
         
